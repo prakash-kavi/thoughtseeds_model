@@ -5,6 +5,7 @@ from typing import Dict, List
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.patches import Patch
 
 from config.defaults import DEFAULT_DT, MODEL_VERSION, PLOT_STEPS, STATES
 from viz.plotting_utils import STATE_COLORS, STATE_DISPLAY_NAMES, save_figure, set_plot_style
@@ -166,35 +167,52 @@ def plot_fe_and_dwell(novice_data: dict, expert_data: dict, save_path: str) -> N
 
     novice_lengths = novice_data['dwell_run_lengths']
     expert_lengths = expert_data['dwell_run_lengths']
-    novice_means = [DEFAULT_DT * np.mean(novice_lengths[state]) if novice_lengths[state] else 0.0 for state in STATES]
-    expert_means = [DEFAULT_DT * np.mean(expert_lengths[state]) if expert_lengths[state] else 0.0 for state in STATES]
-    # No error bars. A standard deviation over the episodes in one window is not an
-    # estimate of the duration law: novice Breath Focus rests on three episodes and its
-    # within-window spread is a tenth of the c_v the law specifies, which would read as an
-    # unusually regular practitioner rather than as a small sample. Across-seed variability
-    # is reported in the five-run robustness table instead.
+
+    def _summary(lengths):
+        """Bar heights with asymmetric whiskers reaching the shortest and longest episode."""
+        means, lower, upper = [], [], []
+        for state in STATES:
+            durations = DEFAULT_DT * np.asarray(lengths[state], dtype=float)
+            if durations.size == 0:
+                means.append(0.0)
+                lower.append(0.0)
+                upper.append(0.0)
+                continue
+            mean = float(durations.mean())
+            means.append(mean)
+            lower.append(mean - float(durations.min()))
+            upper.append(float(durations.max()) - mean)
+        return means, np.asarray([lower, upper])
+
+    # Whiskers span the shortest and longest episode observed, not a standard
+    # deviation. A standard deviation over three or four episodes is not an
+    # estimate of the duration law: its spread is a fraction of the c_v the law
+    # specifies, which would read as an unusually regular practitioner rather
+    # than as a small sample. The range makes no such claim -- it reports only
+    # what the window contained. Across-seed variability is reported in the
+    # five-run robustness table.
+    novice_means, novice_range = _summary(novice_lengths)
+    expert_means, expert_range = _summary(expert_lengths)
     colors = [STATE_COLORS[state] for state in STATES]
-    ax.bar(x - width / 2, novice_means, width, label='Novice', color=colors, alpha=0.4, hatch='//', edgecolor='black', linewidth=1)
-    ax.bar(x + width / 2, expert_means, width, label='Expert', color=colors, alpha=0.7, edgecolor='black', linewidth=1)
+    error_style = dict(ecolor='black', capsize=3, elinewidth=1, capthick=1)
+    ax.bar(x - width / 2, novice_means, width, color=colors, alpha=0.4, hatch='//',
+           edgecolor='black', linewidth=1, yerr=novice_range, error_kw=error_style)
+    ax.bar(x + width / 2, expert_means, width, color=colors, alpha=0.7,
+           edgecolor='black', linewidth=1, yerr=expert_range, error_kw=error_style)
 
-    # Error bars are spreads over the episodes observed in one window, and that
-    # count can be small: four episodes landing close together produce a bar far
-    # narrower than the duration law itself implies. Print the count under each
-    # bar so a narrow bar is read as a small sample rather than a narrow law.
-    for offset, lengths in ((-width / 2, novice_lengths), (width / 2, expert_lengths)):
-        for index, state in enumerate(STATES):
-            ax.annotate(f'n={len(lengths[state])}', (x[index] + offset, 0.0), xytext=(0, 3),
-                        textcoords='offset points', ha='center', va='bottom',
-                        fontsize=8, color='0.25')
-
-    upper = max(1.0, float(np.max(np.asarray(novice_means + expert_means))))
+    whisker_tops = np.concatenate([np.asarray(novice_means) + novice_range[1],
+                                   np.asarray(expert_means) + expert_range[1]])
+    upper = max(1.0, float(np.max(whisker_tops)))
     ax.set_ylim(0, upper * 1.15)
     ax.set_ylabel('Average Dwell Time (s)', fontsize=12, fontweight='bold')
-    ax.set_title('Dwell times, with the number of episodes each mean rests on',
+    ax.set_title('Dwell times, with the range of episode durations observed',
                  fontsize=14, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels([STATE_DISPLAY_NAMES[state] for state in STATES], fontsize=11)
-    ax.legend(fontsize=9)
+    ax.legend(handles=[
+        Patch(facecolor='0.7', alpha=0.4, hatch='//', edgecolor='black', label='Novice'),
+        Patch(facecolor='0.7', alpha=0.7, edgecolor='black', label='Expert'),
+    ], fontsize=9)
     ax.grid(True, axis='y', linestyle='--', alpha=0.3)
     ax.set_axisbelow(True)
     save_figure(fig, Path(save_path))

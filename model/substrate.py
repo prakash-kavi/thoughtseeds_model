@@ -105,14 +105,10 @@ class Layer1Process(nn.Module):
     def _clamp_theta(self, theta: torch.Tensor) -> torch.Tensor:
         """Set each diagonal to its row's off-diagonal sum plus the settling margin.
 
-        The margin is the slowest relaxation rate the construction leaves in any
-        regime: for a row whose couplings are wholly cross-excitatory, the global
-        co-activation mode relaxes at exactly that rate. It is therefore derived
-        (THETA_SETTLING_MARGIN) so that every regime expresses its configured
-        attractor within a typical dwell and L1 runs faster than the L2 latent it
-        drives. No upper clip is applied: the diagonal is whatever the margin
-        requires, and the integrator's stability bound is asserted instead, with
-        roughly six-fold headroom at the configured couplings.
+        Gershgorin discs bound real parts of drift eigenvalues below by the
+        margin. The Euler update discs lie strictly inside the unit circle when
+        dt_sub * (diagonal + off-diagonal absolute sum) < 2 for every row.
+        This sufficient condition also covers asymmetric couplings.
         """
         n = len(NETWORKS)
         off_diag_mask = 1.0 - torch.eye(n)
@@ -127,9 +123,10 @@ class Layer1Process(nn.Module):
                 "the OU drift to be mean-reverting (supplementary S1.2); this "
                 "must hold for every call."
             )
-        if float(final_diag.max()) >= THETA_STABILITY_LIMIT:
+        row_bound = float((final_diag + off_diag_sum).max())
+        if row_bound >= THETA_STABILITY_LIMIT:
             raise RuntimeError(
-                f"Theta(s) stiffness {float(final_diag.max()):.2f} reaches the "
+                f"Theta(s) Gershgorin row bound {row_bound:.2f} reaches the "
                 f"explicit-Euler stability bound {THETA_STABILITY_LIMIT:.1f} for "
                 f"the configured substep; reduce the couplings or the settling "
                 f"margin, or add substeps."

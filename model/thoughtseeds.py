@@ -116,14 +116,15 @@ class Layer2Agent(nn.Module):
             latent_dim=len(THOUGHTSEEDS),
         )
 
-        self.mu_params = nn.ParameterDict()
-        for state in STATES:
-            priors = THOUGHTSEED_STATE_PRIORS[state].copy()
-            mu_vec = [priors[ts] for ts in THOUGHTSEEDS]
-            self.mu_params[state] = nn.Parameter(torch.tensor(mu_vec, dtype=torch.float32), requires_grad=False)
         self.register_buffer(
             "mu_stack",
-            torch.stack([self.mu_params[s].detach() for s in STATES]),
+            torch.stack([
+                torch.tensor(
+                    [THOUGHTSEED_STATE_PRIORS[state][ts] for ts in THOUGHTSEEDS],
+                    dtype=torch.float32,
+                )
+                for state in STATES
+            ]),
         )
         # System 1 learned defaults: which transition is expected (habit) and
         # which content wins workspace access (access prior beta).
@@ -137,14 +138,15 @@ class Layer2Agent(nn.Module):
 
     def observe_detection(self, current_state: str, accessed: Optional[str],
                           meta_awareness: float) -> bool:
-        """Complete detection when clarity crosses b_m under lapse-detection content.
+        """Complete detection when lapse-detection content and sufficient clarity coincide.
 
         Recognition is graded, not instantaneous: the detection content being
         broadcast is the inkling, and detection completes only once monitoring
         clarity reaches the same meaningful-monitoring threshold that gates
         access learning. Because MA still carries mind-wandering content, the
         detection content must first win the workspace against it, so the
-        latency reflects access competition as well as the clarity crossing.
+        latency reflects when both access and sufficient clarity are present;
+        clarity may already exceed the threshold when detection content arrives.
         """
         if current_state != DETECTION_STATE:
             self.reset_detection()
@@ -157,6 +159,10 @@ class Layer2Agent(nn.Module):
         self.detection_completed = self.detection_completed or event
         return event
 
+    def state_attractor(self, state: str) -> torch.Tensor:
+        """Configured thoughtseed attractor mu_z(s): one row of `mu_stack`."""
+        return self.mu_stack[STATES.index(state)]
+
     def _ou_step_z(
         self,
         current_state: str,
@@ -165,7 +171,7 @@ class Layer2Agent(nn.Module):
         """OU-like latent dynamics for thoughtseeds (slow latent causes)."""
         dt = float(DEFAULT_DT)
         tau = max(float(LATENT_TAU), dt)
-        mu = self.mu_params[current_state].detach()
+        mu = self.state_attractor(current_state)
         return ou_step_scalar(
             value=z_prev,
             target=mu,
@@ -176,8 +182,12 @@ class Layer2Agent(nn.Module):
             clip_max=CLIP_MAX,
         )
 
-    def decode_with_state(self, z: torch.Tensor) -> torch.Tensor:
-        """Top-down: decode thoughtseeds -> networks."""
+    def decode_clipped(self, z: torch.Tensor) -> torch.Tensor:
+        """Top-down: decode thoughtseeds -> networks, clipped to [0, 1].
+
+        The clipped output supplies policy targets and descending predictions;
+        the correction and learning objective use the raw linear decoder.
+        """
         if z.dim() == 1:
             z_in = z.unsqueeze(0)
             decoded = self.thoughtseed_model.decode(z_in).squeeze(0)
@@ -285,10 +295,10 @@ class Layer2Agent(nn.Module):
     ):
         """Compute pragmatic-control costs for the current policy candidates."""
         with torch.no_grad():
-            mu_candidates = [self.mu_params[s] for s in candidates]
+            mu_candidates = [self.state_attractor(s) for s in candidates]
             mu_c_stack = torch.stack(mu_candidates)
             x_pred = self.thoughtseed_model.predict_next(x_current.expand(len(candidates), -1), mu_c_stack)
-            x_pref = self.decode_with_state(mu_c_stack)
+            x_pref = self.decode_clipped(mu_c_stack)
 
             g_vals = [float(g) for g in torch.mean((x_pred - x_pref) ** 2, dim=-1).tolist()]
 
@@ -302,7 +312,7 @@ class Layer2Agent(nn.Module):
         """
         weights = torch.tensor(q_pi, dtype=mu_candidates[0].dtype)
         mu = torch.sum(weights.unsqueeze(-1) * torch.stack(mu_candidates, 0), dim=0)
-        return mu, self.decode_with_state(mu)
+        return mu, self.decode_clipped(mu)
 
     def evaluate_policy_evidence(
         self,
@@ -361,6 +371,8 @@ class Layer2Agent(nn.Module):
         selected_mu, mu_x_policy = self._select_attractor(q_pi, mu_candidates)
         mu_x_state = networks_to_tensor(NETWORK_PROFILES[current_state][self.level], NETWORKS).to(mu_x_policy.device)
         mu_x_effective = convex_blend(mu_x_state, mu_x_policy, descending_prediction_weight(meta_awareness))
+        # Recomputed here rather than passed in: it is a pure function of
+        # (o_t, s_t, D_t), all unchanged since the loop's own call.
         hazard_modulation = self.broadcast_hazard_modulation(accessed, current_state)
         return {
             'selected_action_mu': selected_mu,

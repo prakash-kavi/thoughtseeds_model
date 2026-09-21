@@ -146,7 +146,7 @@ def test_detection_flows_through_l2_and_resets_for_frozen_rollout(monkeypatch):
     # covers the plumbing, so start the monitor above it rather than waiting for
     # the crossing.
     trainer.workspace.meta_awareness = 1.0
-    z = trainer.agent.mu_params['meta_awareness'].detach()
+    z = trainer.agent.state_attractor('meta_awareness')
     _, state, _, metrics = trainer._predict_correct_act_step(0, z)
     assert state == 'meta_awareness'
     assert metrics['detection_event'] and metrics['detection_completed']
@@ -246,8 +246,11 @@ def test_exports_resolve_manuscript_macros_and_record_model_version(tmp_path, mo
     assert 'same sign as the median' in table
     defined = set(re.findall(r'\\newcommand\{\\(\w+)\}', stats))
     root = Path(__file__).resolve().parents[1]
+    # Manuscripts are local, ignored files; export checks above also run in clones.
+    if not (root / 'noc-oup').is_dir():
+        return
     for filename in ('main.tex', 'supplementary.tex'):
-        manuscript = (root / 'frontiers' / filename).read_text(encoding='utf-8')
+        manuscript = (root / 'noc-oup' / filename).read_text(encoding='utf-8')
         assert rf'\def\ExpectedModelVersion{{{MODEL_VERSION}}}' in manuscript
         used = set(re.findall(r'\\((?:Expert|Novice|Stats|PCA)\w+)', manuscript))
         assert used <= defined, sorted(used - defined)

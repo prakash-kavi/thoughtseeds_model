@@ -4,7 +4,6 @@ A three-layer generative model of focused-attention meditation. It simulates exp
 
 One run per phenotype: a 12,000-step fit followed by an independent 4,000-step frozen rollout. The final 2,000 rollout steps supply the main figures.
 
-The MA detection revision is tracked in [REVISION_PROGRESS.md](REVISION_PROGRESS.md).
 After updating the model, rerun all five seeds before exporting manuscript results.
 Plotting and export reject saved runs from older model versions.
 
@@ -54,8 +53,8 @@ This project runs on CPU only; no GPU support is required or used.
 
 - **Layer 1** (`substrate.py`): a neural generative process over seven large-scale networks (DMN, VAN, DAN, FPN, VIS, SOM, LIM) with four meditation regimes (BF, MW, MA, RA) and multivariate Ornstein-Uhlenbeck dynamics.
 - **Layer 2** (`thoughtseeds.py`): compresses network dynamics into five thoughtseeds via closed-form Bayesian correction (no encoder network), and scores stay/switch policy candidates with a one-step pragmatic control/risk score -- no epistemic term.
-- **Layer 3** (`policy.py`, `workspace.py`): fast, thresholded single-slot workspace access with reverberation and adaptation, plus slow graded meta-awareness ($m_t$), read as monitoring clarity and driven by the on-task log Bayes factor of the accessed content, with evidence--habit conflict as a secondary modulation. Both the drive and the top-down access bias are derived from the thoughtseed diagnosticity table, so no content is classified by hand. An entry into the slot is an access event; meta-awareness weights policy evidence and biases access toward on-task content.
-- MA detection: the first new `aha_moment` entry during MA completes lapse detection. L2 retains that completion until MA ends and releases broadcast stabilization, restoring the existing phenotype-specific Gamma hazard. There is no extra exit clock or RA-only destination mass. Detection, MA regime identity, and graded meta-awareness are distinct.
+- **Layer 3** (`policy.py`, `workspace.py`): fast, thresholded single-slot workspace access with reverberation and adaptation, plus slow graded meta-awareness ($m_t$), read as monitoring clarity. Its primary drive and top-down access bias come from the configured thoughtseed diagnosticity table; the drive is a log-odds contrast, not a calibrated observation likelihood. An empty slot contributes zero drive. Policy--habit discrepancy adds a further input to the monitor target: larger in experts in the evaluated runs, but in those runs never enough to produce a monitoring-threshold crossing during distractor broadcast, so it is not an independent detection trigger. An entry into the slot is an access event; meta-awareness weights policy evidence and biases access toward on-task content.
+- MA detection: the first step during MA with `aha_moment` in the workspace and monitoring clarity at or above its threshold completes lapse detection. No new entry or threshold crossing is required. L2 retains that completion until MA ends and releases broadcast stabilization, restoring the existing phenotype-specific Gamma hazard. There is no extra exit clock or RA-only destination mass. Detection, MA regime identity, and graded meta-awareness are distinct.
 - L1<->L2 blanket: network activity and dwell age upward; descending network predictions, policy-state probabilities, and broadcast hazard modulation downward. L2 incorporates detection-dependent release into that existing modulation signal.
 - L2<->L3 blanket: state belief, dwell/habit/access priors, policy evidence, and thoughtseed activations upward; the selected policy posterior, broadcast winner, and meta-awareness downward.
 

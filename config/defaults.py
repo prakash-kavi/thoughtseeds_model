@@ -38,8 +38,9 @@ P_INV = 1.0 / ((NOISE_LEVEL * DEFAULT_DT) / max(1.0 - _rho ** 2, EPS))
 
 # L3 meta-awareness m_t (System 2): a slow, graded signal for monitoring
 # clarity -- how clearly the agent can tell, from what is currently broadcast,
-# that it is on task. It integrates the accessed content's on-task evidence
-# (below) with evidence--habit conflict; it is not itself a workspace ignition.
+# that it is on task. It integrates the accessed content's diagnosticity-derived
+# signal (below) with policy--habit discrepancy; it is not itself a workspace
+# ignition.
 META_TAU = 2.0        # slower than the L2 latent (LATENT_TAU)
 META_THRESHOLD = 0.5  # control-engagement cost: prior evidence alone leaves m < 0.5
 # Fixed point of the monitor when the slot is empty and evidence matches habit:
@@ -127,12 +128,9 @@ def _on_task_posterior() -> dict:
 def _on_task_log_evidence() -> dict:
     """c(o) = ln [P(on task | o)/P(off task | o)] - ln [P(on task)/P(off task)].
 
-    The log Bayes factor that the agent is on task, given the accessed content,
-    relative to a uniform prior over regimes. It is zero when the slot is empty
-    (no content, no evidence, fall back to the prior), positive for content
-    diagnostic of the regulated regimes, and negative for content diagnostic of
-    Mind Wandering. This replaces a hand-assigned content signal with a quantity
-    the model's own priors already determine.
+    A diagnosticity-derived log-odds contrast relative to uniform regime weights,
+    not a calibrated likelihood of workspace observations. Positive for content
+    diagnostic of regulated regimes and negative for Mind Wandering content.
     """
     prior_log_odds = log(len(STATES) - 1)
     return {

@@ -133,7 +133,6 @@ class MeditationTrainer:
             }
 
             metrics = {
-                'timestamp': t,
                 'free_energy': free_energy,
                 'forward_error': forward_error_value,
                 'meta_awareness': meta_awareness,
@@ -152,7 +151,6 @@ class MeditationTrainer:
                 'action_prev': previous['action'] if previous is not None else None,
                 'x_curr': x_current.detach(),
                 'z_star': z_star,
-                'z_prior': z_prior.detach(),
                 'state_belief': state_belief,
                 'previous_access': previous_access,
                 'accessed_content': accessed_content,

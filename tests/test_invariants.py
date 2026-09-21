@@ -4,11 +4,11 @@ import torch
 
 from config.defaults import (
     ACCESS_CREDIT_HOLD_STEPS, ACCESS_THRESHOLD, CLIP_MAX, CLIP_MIN, DESCENDING_PREDICTION_GAIN,
-    DISTRACTORS, EPS, LATENT_TAU, META_RESTING, META_TAU, NETWORKS, ON_TASK_CONTRAST,
+    DEFAULT_DT, DISTRACTORS, EPS, LATENT_TAU, META_RESTING, META_TAU, META_THRESHOLD, NETWORKS, ON_TASK_CONTRAST,
     PRACTICE_OBJECT, STATES, THOUGHTSEEDS, get_policy_candidate_order,
 )
 from config.profiles import (
-    ATTRACTOR_EXPRESSING_STATES, ATTRACTOR_SETTLING_HORIZONS, DWELL_MEAN_SECONDS,
+    ATTRACTOR_EXPRESSING_STATES, ATTRACTOR_SETTLING_HORIZONS, DWELL_MEAN_SECONDS, L1_SUBSTEPS,
     STATE_TRANSITION_PROBS, THETA_SETTLING_MARGIN, THETA_STABILITY_LIMIT, TIMESCALE_SEPARATION,
 )
 from model import duration
@@ -205,7 +205,7 @@ def test_monitoring_clarity_amplifies_on_task_content_in_proportion_to_its_evide
 def test_hazard_modulation_is_formed_by_l2_from_accessed_content():
     agent = Layer2Agent(EXPERT_PHENOTYPE)
     candidates = get_policy_candidate_order('mind_wandering')
-    mu_candidates = [agent.mu_params[s] for s in candidates]
+    mu_candidates = [agent.state_attractor(s) for s in candidates]
     posterior = {state: 1.0 / len(candidates) for state in candidates}
 
     def modulation(m, content, state='mind_wandering'):
@@ -265,9 +265,9 @@ def test_policy_habit_update_increases_intended_switch_prior():
 
 
 def test_workspace_returns_unit_interval_meta_awareness():
-    blanket = MarkovBlanketL2L3()
     workspace = GlobalWorkspace()
-    values = [workspace.update_meta_awareness([0.1, 0.5, 0.3, 0.2], np.log(np.full(4, 0.25))) for _ in range(50)]
+    values = [workspace.update_meta_awareness([0.1, 0.5, 0.3, 0.2], np.log(np.full(4, 0.25)))
+              for _ in range(50)]
     assert all(0.0 <= value <= 1.0 for value in values)
 
 
@@ -288,9 +288,8 @@ def test_meta_awareness_is_slow_graded_and_driven_by_accessed_content():
 
 def test_on_task_evidence_is_derived_from_the_diagnosticity_table():
     from config.defaults import OFF_TASK_STATE, THOUGHTSEED_DIAGNOSTICITY
-    # No content is classified by hand: c(o) is the log Bayes factor for being
-    # on task, so its sign follows d_o(MW) against the uniform prior, and an
-    # empty slot carries no evidence at all.
+    # The contrast follows configured diagnosticity against uniform regime
+    # weights; an empty slot contributes zero.
     assert GlobalWorkspace.on_task_evidence(None) == 0.0
     for thoughtseed, row in THOUGHTSEED_DIAGNOSTICITY.items():
         evidence = GlobalWorkspace.on_task_evidence(thoughtseed)
@@ -342,9 +341,9 @@ def test_layer_timescales_are_ordered_from_fast_access_to_slow_learning():
             theta = process._clamp_theta(process._get_coupling(state)).detach().numpy()
             rates = np.real(np.linalg.eigvals(theta))
             slowest = max(slowest, 1.0 / rates.min())
-            # The diagonal the margin requires must stay inside the integrator's
-            # stability bound; the construction asserts this, so it must hold.
-            assert np.diag(theta).max() < THETA_STABILITY_LIMIT
+            assert np.abs(theta).sum(axis=1).max() < THETA_STABILITY_LIMIT
+            update = np.eye(len(NETWORKS)) - DEFAULT_DT / L1_SUBSTEPS * theta
+            assert max(abs(np.linalg.eigvals(update))) < 1.0
     assert slowest <= LATENT_TAU / TIMESCALE_SEPARATION + 1e-9
     # The layer relaxation timescales are strictly ordered, fastest first.
     layers = [
@@ -366,25 +365,76 @@ def test_layer_timescales_are_ordered_from_fast_access_to_slow_learning():
     assert min(slower_processes) > max(layers)
 
 
-def test_detection_precedes_redirection_and_redirection_is_the_shorter_regime():
+def test_configured_regulatory_dwell_ordering():
     # MA is the interval in which detection develops and RA executes a committed
     # policy, so MA is the longer regime, and both phenotypes agree on that.
     for level, dwells in DWELL_MEAN_SECONDS.items():
         assert dwells['meta_awareness'] > dwells['redirect_attention']
         assert dwells['breath_focus'] > dwells['meta_awareness']
         assert dwells['mind_wandering'] > dwells['meta_awareness']
-    # RA executes an already committed policy, so the coupled subspace of
-    # Theta(RA) sets an execution floor that no phenotype may undercut. The
-    # expert sits at that floor; the novice runs above it.
-    for phenotype in (NOVICE_PHENOTYPE, EXPERT_PHENOTYPE):
-        process = Layer1Process(phenotype, seed=0)
-        theta = process._clamp_theta(process._get_coupling('redirect_attention')).detach().numpy()
-        coupled = [i for i in range(len(NETWORKS))
-                   if abs(theta[i]).sum() - abs(theta[i, i]) > 1e-9]
-        floor = 1.0 / np.real(np.linalg.eigvals(theta[np.ix_(coupled, coupled)])).min()
-        assert DWELL_MEAN_SECONDS[phenotype.level]['redirect_attention'] >= floor - 1e-9
     assert (DWELL_MEAN_SECONDS['novice']['redirect_attention']
             > DWELL_MEAN_SECONDS['expert']['redirect_attention'])
+
+
+@pytest.mark.parametrize('content', [None] + THOUGHTSEEDS)
+def test_monitor_matches_the_stated_update(content):
+    habit = np.log(np.full(4, 0.25))
+    costs = [0.0, 2.0, 2.0, 2.0]
+    q_evid = np.exp(-np.array(costs))
+    q_evid /= q_evid.sum()
+    discrepancy = float(np.sum(q_evid * np.log(q_evid / np.full(4, 0.25))))
+    workspace = GlobalWorkspace()
+    workspace.accessed_content = content
+    workspace.meta_awareness = 0.7
+    drive = workspace.on_task_evidence(content) + discrepancy - META_THRESHOLD
+    target = 1.0 / (1.0 + np.exp(-drive))
+    expected = 0.7 + DEFAULT_DT / META_TAU * (target - 0.7)
+    assert workspace.update_meta_awareness(costs, habit) == pytest.approx(expected)
+
+
+def test_empty_workspace_relaxes_to_shared_resting_monitor():
+    # Matched evidence and habit leave no discrepancy, so an empty slot relaxes
+    # to sigmoid(-b_m) from either side.
+    habit = np.log(np.full(4, 0.25))
+    costs = [0.1, 0.1, 0.1, 0.1]
+    for initial in (0.0, META_RESTING, 1.0):
+        workspace = GlobalWorkspace()
+        workspace.meta_awareness = initial
+        for _ in range(200):
+            workspace.update_meta_awareness(costs, habit)
+        assert workspace.meta_awareness == pytest.approx(META_RESTING, abs=1e-8)
+
+
+def test_policy_habit_discrepancy_is_non_negative_and_raises_the_monitor():
+    habit = np.log(np.full(4, 0.25))
+    matched, conflicted = GlobalWorkspace(), GlobalWorkspace()
+    for workspace in (matched, conflicted):
+        workspace.accessed_content = PRACTICE_OBJECT
+    matched.update_meta_awareness([0.25, 0.25, 0.25, 0.25], habit)
+    conflicted.update_meta_awareness([0.0, 2.0, 2.0, 2.0], habit)
+    assert conflicted.meta_awareness > matched.meta_awareness
+
+
+def test_threshold_crossing_under_distraction_would_need_discrepancy_far_above_observed():
+    # A configuration-level bound, not an enforced runtime property: given the
+    # c table and b_m, a discrepancy of 0.30 -- above the largest observed in
+    # seeds 100-104 (0.269) -- still leaves the distractor target below
+    # threshold. Crossing would need roughly 1.39 (pain) or 1.52 (pending
+    # tasks). This does not constrain what discrepancies a simulation reaches.
+    observed_max_discrepancy = 0.30
+    for content in DISTRACTORS:
+        drive = (GlobalWorkspace.on_task_evidence(content)
+                 + observed_max_discrepancy - META_THRESHOLD)
+        assert 1.0 / (1.0 + np.exp(-drive)) < META_THRESHOLD
+
+
+def test_theta_guard_rejects_unstable_coupling_that_passed_diagonal_check():
+    process = Layer1Process(EXPERT_PHENOTYPE)
+    theta = torch.zeros((len(NETWORKS), len(NETWORKS)))
+    theta[0, 1] = theta[1, 0] = 10.0
+    # Constructed diagonals are 12 (<20), but an eigenvalue is 22: Euler is unstable.
+    with pytest.raises(RuntimeError, match='Gershgorin row bound'):
+        process._clamp_theta(theta)
 
 
 def test_access_prior_credits_only_held_practice_reignition_after_meta_awareness():

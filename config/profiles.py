@@ -11,8 +11,8 @@ NETWORK_PROFILES = {
         "novice": {"DMN": 0.82, "VAN": 0.35, "DAN": 0.30, "FPN": 0.33, "VIS": 0.42, "SOM": 0.30, "LIM": 0.75},
         "expert": {"DMN": 0.70, "VAN": 0.40, "DAN": 0.28, "FPN": 0.38, "VIS": 0.35, "SOM": 0.28, "LIM": 0.55},
     },
-    # MA is mind wandering that has become known, not a separate content
-    # regime: DMN and LIM stay elevated between their MW and BF values while
+    # MA is the interval in which mind wandering becomes known: DMN and LIM
+    # stay elevated between their MW and BF values while
     # VAN (salience) comes online. Disengagement belongs to RA.
     "meta_awareness": {
         "novice": {"DMN": 0.70, "VAN": 0.85, "DAN": 0.42, "FPN": 0.56, "VIS": 0.35, "SOM": 0.38, "LIM": 0.62},
@@ -24,14 +24,10 @@ NETWORK_PROFILES = {
     },
 }
 
-# Meta Awareness is the interval in which the lapse becomes known: mind
-# wandering that is now recognized, still carrying its content. Its mean is a
-# time-to-notice -- long, variable, and longer for the novice. Redirect
-# Attention executes a policy already committed to, so the coupled subspace of
-# Theta(RA) sets an execution floor of about 3 s (novice 3.04, expert 2.84).
-# The expert sits at that floor; the novice runs above it because re-engaging
-# the practice object is less efficient, which is a phenotype claim rather than
-# a derivation.
+# Phenomenologically motivated baseline dwell means, not inferred durations or
+# relaxation-time derivations. MA includes time before and after detection;
+# its dwell is not detection latency. Novice noticing and redirection are slower
+# by configuration, while control can modify the realized durations.
 DWELL_MEAN_SECONDS = {
     'expert': {'breath_focus': 20.0, 'mind_wandering': 14.0, 'meta_awareness': 4.5, 'redirect_attention': 3.0},
     'novice': {'breath_focus': 14.0, 'mind_wandering': 20.0, 'meta_awareness': 7.5, 'redirect_attention': 5.0},
@@ -50,14 +46,9 @@ ATTRACTOR_SETTLING_HORIZONS = 3.0   # e^-3, ~5% residual, is "settled"
 # L1's slowest relaxation mode must sit below the L2 latent it drives.
 TIMESCALE_SEPARATION = 2.0
 
-# Slowest L1 relaxation mode the coupling clamp may leave in any regime, as a
-# rate. Derived from two requirements, not tuned. First, 3*tau_slow must fit
-# inside the shortest dwell that has to express its attractor: without this the
-# MA coupling, whose cross-excitatory design has a slow global co-activation
-# mode, relaxes at 10 s against a 4.5 s dwell and the MA attractor is never
-# reached. Second, tau_slow must be at least TIMESCALE_SEPARATION times shorter
-# than LATENT_TAU, so L1 is faster than the layer above it rather than
-# straddling it. The binding requirement sets the margin.
+# Lower bound on L1 drift eigenvalue real parts, computed from chosen settling
+# and timescale-separation requirements. Uncoupled coordinates attain the bound;
+# phenotype scaling still changes the coupled relaxation modes.
 THETA_SETTLING_MARGIN = max(
     ATTRACTOR_SETTLING_HORIZONS / min(
         DWELL_MEAN_SECONDS[level][state]
@@ -67,9 +58,8 @@ THETA_SETTLING_MARGIN = max(
     TIMESCALE_SEPARATION / LATENT_TAU,
 )
 
-# Explicit Euler on the L1 substep is stable while the stiffness stays below
-# 2/dt_sub. The diagonal is whatever the settling margin requires; this is the
-# bound that requirement must respect, asserted rather than enforced by clipping.
+# The Gershgorin row bound (diagonal + off-diagonal absolute sum) must stay below
+# 2/dt_sub: a sufficient Euler-stability condition for the constructed matrices.
 L1_SUBSTEPS = 2
 THETA_STABILITY_LIMIT = 2.0 / (DEFAULT_DT / L1_SUBSTEPS)
 
