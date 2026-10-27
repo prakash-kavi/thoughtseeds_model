@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the article below."
+title: "Thoughtseeds model: a three-layer dual-process computational model of focused-attention meditation"
+version: 1.0.0
+license: Apache-2.0
+repository-code: "https://github.com/prakash-kavi/thoughtseeds_model"
+authors:
+  - family-names: Kavi
+    given-names: Prakash Chandra
+  - family-names: Friedman
+    given-names: Daniel Ari
+  - family-names: Patow
+    given-names: Gustavo
+preferred-citation:
+  type: article
+  title: "Thoughtseeds as Latent Causes: A Dual-Process Computational Phenomenology of Focused-Attention Meditation"
+  authors:
+    - family-names: Kavi
+      given-names: Prakash Chandra
+    - family-names: Friedman
+      given-names: Daniel Ari
+    - family-names: Patow
+      given-names: Gustavo
+  year: 2026
+  journal: "arXiv preprint"
+  doi: "10.48550/arXiv.2607.14833"
+  url: "https://arxiv.org/abs/2607.14833"
