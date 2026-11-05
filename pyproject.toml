@@ -1,7 +1,7 @@
 [project]
 name = "thoughtseeds-model"
 version = "1.0.0"
-description = "Three-layer dual-process computational model of focused-attention meditation"
+description = "Active-inference-inspired model of mind wandering and its recognition in focused-attention meditation"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"

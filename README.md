@@ -1,6 +1,8 @@
-# Dual-Process Computational Model
+# Thoughtseeds Model
 
-A three-layer generative model of focused-attention meditation. It simulates expert and novice phenotypes across the cycle of Breath Focus, Mind Wandering, Meta Awareness and Redirect Attention, and produces the figures, tables and statistics reported in the manuscript.
+Simulating mind wandering, monitoring and the recognition of attentional lapses in focused-attention meditation.
+
+Code and saved runs for a three-level, active-inference-inspired model of focused-attention meditation on the breath. Mental contents, termed thoughtseeds, are inferred from simulated large-scale brain network activity and compete for a capacity-limited global workspace, while a separate monitor supports recognition of attentional lapses. The model simulates expert and novice phenotypes across the cycle of Breath Focus, Mind Wandering, Meta Awareness and Redirect Attention, and produces the figures, tables and statistics of the accompanying manuscript.
 
 Each run per phenotype is a 12,000-step fit followed by an independent 4,000-step frozen rollout. Figures and statistics use the final 2,000 rollout steps.
 

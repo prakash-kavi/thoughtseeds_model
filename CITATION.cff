@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite the article below."
-title: "Thoughtseeds model: a three-layer dual-process computational model of focused-attention meditation"
+title: "Thoughtseeds model: an active-inference-inspired model of mind wandering and its recognition in focused-attention meditation"
 version: 1.0.0
 license: Apache-2.0
 repository-code: "https://github.com/prakash-kavi/thoughtseeds_model"
