@@ -48,7 +48,7 @@ The model runs on CPU only.
 
 - **Layer 1** (`substrate.py`, `duration.py`): a switching multivariate Ornstein-Uhlenbeck process over seven large-scale networks (DMN, VAN, DAN, FPN, VIS, SOM, LIM), with four regimes (BF, MW, MA, RA) and a Gamma dwell law per regime.
 - **Layer 2** (`thoughtseeds.py`): a switching Kalman filter that infers five thoughtseed activations and a belief over the regime from network activity.
-- **Layer 3** (`workspace.py`, `habits.py`, `policy.py`): single-slot workspace access, monitoring clarity, the lapse belief, the recognition indicator and the return policy.
+- **Layer 3** (`workspace.py`, `habits.py`, `policy.py`): single-slot workspace access, monitoring clarity with stochastic monitoring checks, the lapse belief, the recognition indicator and the return policy.
 - Layers exchange signals only through the Markov blankets in `markov_blankets.py`. No layer receives the regime from another.
 
 Thoughtseeds: `breath_sensation`, `pain_discomfort`, `pending_tasks`, `recognition_cue`, `intention_to_return`.
@@ -65,7 +65,7 @@ Figures and tables are generated into `figures/`. `scripts/export_stats.py` writ
 |---|---|
 | `fig4a.pdf`, `fig4b.pdf` | Fig. 4: regime network profiles, transition proportions |
 | `fig5a.pdf`, `fig5b.pdf` | Fig. 5: novice and expert hierarchical traces |
-| `fig6.pdf` | Fig. 6: detection while a distractor remains in the workspace |
+| `fig6.pdf` | Fig. 6: selected recognition events, in Meta Awareness and during established Mind Wandering |
 | `FigS1_Convergence_{Expert,Novice}.pdf` | Fig. S1: L2 surprisal and regime occupancy over the full run |
 | `figS2_practice.pdf` | Fig. S2: practice curves over training, seeds 100--104 |
 
@@ -87,7 +87,7 @@ Figures and tables are generated into `figures/`. `scripts/export_stats.py` writ
 |   +-- substrate.py               # Layer 1 network dynamics
 |   +-- duration.py                # Gamma exit probability and broadcast stabilization
 |   +-- thoughtseeds.py            # Layer 2 switching filter
-|   +-- workspace.py               # Layer 3 access, monitoring, lapse belief, detection
+|   +-- workspace.py               # Layer 3 access, monitoring and checks, lapse belief, detection
 |   +-- habits.py                  # Layer 3 learned access prior
 |   +-- policy.py                  # Layer 3 return policy and habit
 |   +-- markov_blankets.py         # Interfaces between layers

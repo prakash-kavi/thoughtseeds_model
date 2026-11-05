@@ -16,9 +16,9 @@ sys.path.insert(0, str(ROOT))
 from config.defaults import DEFAULT_DT, MODEL_VERSION, NETWORKS, PLOT_STEPS, STATES
 from viz.analysis_utils import compute_tail_statistics, validate_network_schema
 from experiments.training_pipeline import ROBUSTNESS_SEEDS as SEEDS, result_path
-from viz.ignition import (access_summary, breath_reentry_to_offset, detection_summary, event_measure_summary,
-                          meta_awareness_detection_access, onset_outcomes, plot_practice_curves, practice_blocks,
-                          return_effort_summary)
+from viz.ignition import (access_summary, breath_reentry_to_offset, detection_summary, established_wandering_recognition,
+                          event_measure_summary, meta_awareness_detection_access, onset_outcomes, plot_practice_curves,
+                          practice_blocks, return_effort_summary)
 from viz.plotting_utils import STATE_SHORT_NAMES
 
 OUT = ROOT / "figures" / "robustness.tex"
@@ -34,12 +34,12 @@ MEASURES = [
     ("Breath access run (s)", "access", "breath_run_seconds", 2),
     ("Mean $m_t$ over the window", "access", "clarity_session", 3),
     ("Mean $m_t$ in Breath Focus", "access", "clarity_bf", 3),
-    ("Detection-to-RA latency, within-run median (s)", "detection", "redirection_latency_seconds", 2),
+    ("Recognition-to-RA latency, within-run median (s)", "detection", "redirection_latency_seconds", 2),
     ("Return effort at MA exit (nats)", "effort", "return_effort_nats", 3),
-    (r"Onsets with breath re-entry, $\hat p_{\mathrm b}$", "event", "breath_return_proportion", 2),
-    (r"Recognition-to-breath latency, within-run median of $\ell_k$ (s)", "event", "breath_return_latency_seconds", 1),
+    (r"Onsets with breath re-entry", "event", "breath_return_proportion", 2),
+    (r"Recognition-to-breath latency, within-run median (s)", "event", "breath_return_latency_seconds", 1),
     ("Same-distractor overlap, within-run median (s)", "event", "overlap_seconds", 1),
-    (r"Distraction time with recognition, $\hat p_{\mathrm d}$", "event", "recognized_distraction_all", 2),
+    (r"Distraction time with recognition", "event", "recognized_distraction_all", 2),
     (r"\quad in Mind Wandering", "event", "recognized_distraction_mind_wandering", 2),
     (r"\quad in Meta Awareness", "event", "recognized_distraction_meta_awareness", 2),
 ]
@@ -47,17 +47,17 @@ MEASURES = [
 # Table S4 group headings, each placed before the measure it names.
 MEASURE_GROUPS = {
     "Breath Focus dwell (s)": "Access, monitoring and regime dynamics",
-    "Detection-to-RA latency, within-run median (s)": "Recognition and return",
+    "Recognition-to-RA latency, within-run median (s)": "Recognition and return",
 }
 
 # Main-text event table: (label, within-run summary, source, key, digits). Sources: "event" for
 # event_measure_summary, "detection" for detection_summary.
 EVENT_ROWS = [
-    (r"Recognition onsets with breath re-entry before or at recognition offset, $\hat p_{\mathrm b}$",
+    (r"Recognition onsets with breath re-entry before or at recognition offset",
      "proportion of all onsets", "event", "breath_return_proportion", 2),
-    (r"Recognition-to-breath latency (s), $\ell_k$, among those re-entries", "median", "event",
+    (r"Recognition-to-breath latency (s), among those re-entries", "median", "event",
      "breath_return_latency_seconds", 1),
-    ("Detection-to-RA latency (s), qualifying MA episodes with a direct RA exit", "median", "detection",
+    ("Recognition-to-RA latency (s), qualifying MA episodes with a direct RA exit", "median", "detection",
      "redirection_latency_seconds", 1),
     ("Same-distractor recognition overlap (s), onsets with a distractor in the workspace", "median", "event",
      "overlap_seconds", 1),
@@ -138,7 +138,7 @@ def _onset_outcome_table() -> list:
         r"\centering",
         r"\caption{\textbf{Recognition onsets by outcome.} Final \StatsPlotSteps{} steps of training seeds 100--104,"
         r" with counts summed over the five runs. Every recognition onset is counted by the regime at its step and its"
-        r" outcome in the definition of $\hat p_{\mathrm b}$ (Section~2.3 of the main text). The breath sensation was"
+        r" outcome in the definition of the breath re-entry proportion (Section~2.3 of the main text). The breath sensation was"
         r" already in the workspace at onset, the breath re-entered before or at recognition offset, recognition ended"
         r" first, or the recognition interval remained open at the window end without breath re-entry. The outcomes"
         r" are exclusive and sum to"
@@ -206,9 +206,11 @@ def _event_table() -> list:
         r"\begin{table}[tbp]",
         r"\centering",
         r"\caption{\textbf{Recognition and return across the five runs.} Each cell is the median of five within-run"
-        r" summaries, one per training seed 100--104 over the evaluation window $\mathcal W$, with the range across"
+        r" summaries, one per training seed 100--104 over the evaluation window, with the range across"
         r" runs in parentheses. The proportion is a median of per-run proportions, not a pooled proportion. The two"
-        r" latency rows are conditional on different eligible cases, named in each row. A summary without eligible"
+        r" latency rows both start at a detection event and measure return at different levels, breath re-entry"
+        r" into the workspace and RA entry. They are conditional on different eligible cases, named in each row."
+        r" A summary without eligible"
         r" cases is unavailable. Definitions are in Section~\ref{sec:recognition}, eligibility in Supplementary"
         r" Section~S3, paired differences in Supplementary Table~S4 and event counts in Supplementary Table~S5.}",
         r"\label{tab:event_measures}",
@@ -234,6 +236,34 @@ def _meta_awareness_detection_macros() -> list:
         lines += [
             rf"\newcommand{{\{prefix}}}{{{sum(run['detections'] for run in runs)}}}",
             rf"\newcommand{{\{prefix}Distractor}}{{{sum(run['distractor'] for run in runs)}}}",
+        ]
+    return lines
+
+
+def _established_wandering_macros() -> list:
+    """\\FiveRun...EstablishedMW macros, pooled over the five plot windows: monitoring checks, recognition onsets during
+    established MW, their rate per minute of established MW, runs with at least one, the share with a distractor in
+    the workspace, and the episodes with no onset after the 3 s point with the 90th percentile of the longest
+    stretch without recognition."""
+    lines = []
+    for phenotype in ("expert", "novice"):
+        runs = [established_wandering_recognition(_load(phenotype, seed), PLOT_STEPS) for seed in SEEDS]
+        onsets = sum(run['onsets'] for run in runs)
+        minutes = sum(run['established_seconds'] for run in runs) / 60.0
+        episodes = sum(run['episodes'] for run in runs)
+        without = sum(run['episodes_without_onset'] for run in runs)
+        longest = [x for run in runs for x in run['longest_unrecognized_seconds']]
+        prefix = f"FiveRun{phenotype.title()}EstablishedMW"
+        lines += [
+            rf"\newcommand{{\FiveRun{phenotype.title()}Checks}}{{{sum(run['checks'] for run in runs)}}}",
+            rf"\newcommand{{\{prefix}Onsets}}{{{onsets}}}",
+            rf"\newcommand{{\{prefix}OnsetsPerMinute}}{{{onsets / minutes:.1f}}}",
+            rf"\newcommand{{\{prefix}OnsetRuns}}{{{sum(run['onsets'] > 0 for run in runs)}/{len(runs)}}}",
+            rf"\newcommand{{\{prefix}DistractorShare}}"
+            rf"{{{sum(run['distractor_onsets'] for run in runs) / onsets if onsets else 0.0:.2f}}}",
+            rf"\newcommand{{\{prefix}Episodes}}{{{episodes}}}",
+            rf"\newcommand{{\{prefix}NoOnsetShare}}{{{without / episodes if episodes else 0.0:.2f}}}",
+            rf"\newcommand{{\{prefix}LongestNinety}}{{{np.percentile(longest, 90) if longest else 0.0:.1f}}}",
         ]
     return lines
 
@@ -326,6 +356,9 @@ def main() -> None:
         *header,
         "% Detection events in MA pooled over the five plot windows, and those with a distractor in the workspace.",
         *_meta_awareness_detection_macros(),
+        "% Monitoring checks and recognition during established Mind Wandering (at least 3 s after entry), pooled over",
+        "% the five plot windows.",
+        *_established_wandering_macros(),
         "% Practice curves (Fig. S2): runs in which the last training block is above or below the first.",
         *_practice_curves(),
         "% Time from first breath re-entry to recognition offset (Supplementary Section S4).",

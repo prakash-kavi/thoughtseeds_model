@@ -8,7 +8,7 @@ import torch
 import torch.optim as optim
 
 from config.defaults import (
-    CLIP_MAX, CLIP_MIN, GRAD_CLIP, LEARNING_RATE, MODEL_VERSION,
+    CLIP_MAX, CLIP_MIN, GRAD_CLIP, LEARNING_RATE, MODEL_VERSION, MONITOR_CHECKS,
     NETWORKS, THOUGHTSEEDS, THOUGHTSEED_STATE_PRIORS,
 )
 from utils.math_utils import networks_to_tensor
@@ -23,14 +23,14 @@ from .workspace import GlobalWorkspace
 _STEP_KEYS = (
     'surprisal', 'clarity', 'lapse_belief', 'accessed_content',
     'detection_event', 'detection_completed', 'network_activations',
-    'thoughtseed_activations', 'regime_belief',
+    'thoughtseed_activations', 'regime_belief', 'monitor_check', 'monitor_engaged',
 )
 
 
 class MeditationTrainer:
     """Run predict, correct, access and select, act, and learn at each simulation step."""
 
-    def __init__(self, phenotype: PhenotypeConfig = None, seed: int = 42):
+    def __init__(self, phenotype: PhenotypeConfig = None, seed: int = 42, monitor_checks: bool = MONITOR_CHECKS):
         self.phenotype = phenotype or EXPERT_PHENOTYPE
         self.level = self.phenotype.level
         self.seed = seed
@@ -42,7 +42,7 @@ class MeditationTrainer:
         self.process = Layer1Process(phenotype=self.phenotype, seed=seed)
         # Built before the optimizer, which binds to its decoder parameters.
         self.agent = Layer2Agent(self.level, blanket_l1l2=self.blanket_l1l2)
-        self.workspace = GlobalWorkspace(self.level)
+        self.workspace = GlobalWorkspace(self.level, monitor_checks=monitor_checks)
         self.policy = ReturnPolicy(self.level)
         self.optimizer = optim.SGD(self.agent.parameters(), lr=LEARNING_RATE)
 
@@ -96,6 +96,8 @@ class MeditationTrainer:
                 },
                 'thoughtseed_activations': z_star.cpu().numpy().tolist(),
                 'regime_belief': self.agent.regime_belief.tolist(),
+                'monitor_check': self.workspace.check,
+                'monitor_engaged': self.workspace.engaged,
             }
             buffer = {
                 'x_curr': x_current,
@@ -172,6 +174,7 @@ class MeditationTrainer:
         torch.manual_seed(run_seed)
         np.random.seed(run_seed)
         self.process.rng = np.random.RandomState(run_seed)
+        self.workspace.seed_checks(run_seed)
 
     def _package_results(self) -> Dict:
         return {
@@ -199,4 +202,7 @@ class MeditationTrainer:
             'network_activations_history': self.history['network_activations'],
             'thoughtseed_activations_history': self.history['thoughtseed_activations'],
             'regime_belief_history': self.history['regime_belief'],
+            'monitor_checks': self.workspace.monitor_checks,
+            'monitor_check_history': self.history['monitor_check'],
+            'monitor_engaged_history': self.history['monitor_engaged'],
         }

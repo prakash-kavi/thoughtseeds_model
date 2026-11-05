@@ -6,11 +6,12 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 
 from config.defaults import (ACCESSIBLE_CONTENTS, DEFAULT_DT, MA_STATE, DISTRACTORS, OFF_TASK_STATE,
                              PLOT_STEPS, PRACTICE_OBJECT, PRACTICE_STATE, RETURN_STATE, STATES)
 from model.policy import ReturnPolicy
-from viz.plotting_utils import (DETECTION_COLOR, STATE_BAND_COLORS, STATE_SHORT_NAMES, THOUGHTSEED_COLORS,
+from viz.plotting_utils import (DETECTION_COLOR, MONITOR_CHECK_COLOR, STATE_BAND_COLORS, STATE_SHORT_NAMES, THOUGHTSEED_COLORS,
                                  content_legend_handles, save_figure, set_plot_style)
 
 
@@ -78,7 +79,7 @@ def detected_ma_episodes(results: Dict, window: int = PLOT_STEPS) -> List[Tuple[
 
 
 def detection_summary(results: Dict, window: int = PLOT_STEPS) -> Dict:
-    """Median detection-to-RA latency over detected MA episodes with an observed direct RA exit."""
+    """Median recognition-to-RA latency over detected MA episodes with an observed direct RA exit."""
     states = results['state_history']
     latencies = [(i - onset) * DEFAULT_DT for _, onset, i in detected_ma_episodes(results, window)
                  if i < len(states) and states[i] == RETURN_STATE]
@@ -390,23 +391,128 @@ def recognized_distraction_share(results: Dict, window: int = PLOT_STEPS) -> Dic
     return {key: (k, total) for key, (k, total) in counts.items()}
 
 
-def focal_distractor_detection(results: Dict, window: int = PLOT_STEPS) -> Optional[int]:
-    """Fig. 6 event: the first MA detection event in the window with the same distractor at t-1, t and t+1."""
+def _focal_distractor_onset(results: Dict, t: int) -> bool:
     content, states = results['accessed_content_history'], results['state_history']
     events, held = results['detection_event_history'], results['detection_completed_history']
-    for t in range(max(1, len(content) - window), len(content) - 1):
-        if (events[t] and held[t] and states[t] == MA_STATE and content[t] in DISTRACTORS
-                and content[t - 1] == content[t] == content[t + 1]):
+    return bool(events[t] and held[t] and states[t] == MA_STATE and content[t] in DISTRACTORS
+                and content[t - 1] == content[t] == content[t + 1])
+
+
+def focal_distractor_detection(results: Dict, window: int = PLOT_STEPS) -> Optional[int]:
+    """The first MA detection event in the window with the same distractor at t-1, t and t+1."""
+    n = len(results['accessed_content_history'])
+    return next((t for t in range(max(1, n - window), n - 1) if _focal_distractor_onset(results, t)), None)
+
+
+def canonical_return_detection(results: Dict, window: int = PLOT_STEPS) -> Optional[int]:
+    """Fig. 6A event: the first focal-distractor detection in the window whose lapse runs MW -> MA -> RA -> BF (the MA
+    episode holding the onset was entered from MW and left to RA, and that RA episode left to BF). The rule conditions
+    on this regime sequence, not on breath re-entry, recognition offset or durations."""
+    states = results['state_history']
+    n = len(states)
+    for t in range(max(1, n - window), n - 1):
+        if not _focal_distractor_onset(results, t):
+            continue
+        start, end = t, t
+        while start > 0 and states[start - 1] == MA_STATE:
+            start -= 1
+        while end < n and states[end] == MA_STATE:
+            end += 1
+        if start == 0 or end >= n or states[start - 1] != OFF_TASK_STATE or states[end] != RETURN_STATE:
+            continue
+        after = end
+        while after < n and states[after] == RETURN_STATE:
+            after += 1
+        if after < n and states[after] == PRACTICE_STATE:
             return t
     return None
 
 
-def anatomy_seed(pinned_seed: int, seeds: Sequence[int], load_pair, window: int = PLOT_STEPS) -> int:
-    """Fig. 6 run: the pinned seed if both phenotypes have a focal-distractor detection, else the first such seed."""
+# Fig. 6B: recognition onsets at least this long after MW entry count as recognition during established wandering.
+ESTABLISHED_MW_SECONDS = 3.0
+ED_PANEL_SECONDS = (10.0, 30.0)  # display window before and after the onset
+
+
+def established_mw_check_onset(results: Dict, window: int = PLOT_STEPS,
+                               span: Tuple[float, float] = ED_PANEL_SECONDS) -> Optional[Tuple[int, bool]]:
+    """Fig. 6B event: the first recognition onset in MW at least ESTABLISHED_MW_SECONDS after MW entry at which a
+    check interval is active (a check at that step or within the preceding interval), searched in the plot
+    window and, when it has none, in the whole frozen rollout. Only onsets whose display window lies inside the
+    rollout are eligible. The rule does not condition on what follows the onset. Returns (step, found in the plot
+    window), or None (also for runs without monitoring checks)."""
+    engaged = results.get('monitor_engaged_history')
+    if not engaged:
+        return None
+    states, events = results['state_history'], results['detection_event_history']
+    n = len(states)
+    rollout_start = int(results.get('training_steps', 0))
+    before, after = (int(round(s / DEFAULT_DT)) for s in span)
+    established = int(round(ESTABLISHED_MW_SECONDS / DEFAULT_DT))
+
+    def eligible(t):
+        if not (events[t] and engaged[t] and states[t] == OFF_TASK_STATE):
+            return False
+        entry = t
+        while entry > 0 and states[entry - 1] == OFF_TASK_STATE:
+            entry -= 1
+        return t - entry >= established and t - before >= rollout_start and t + after <= n
+
+    for lo, in_window in ((max(rollout_start, n - window), True), (rollout_start, False)):
+        t = next((u for u in range(lo, n) if eligible(u)), None)
+        if t is not None:
+            return t, in_window
+    return None
+
+
+def established_wandering_recognition(results: Dict, window: int = PLOT_STEPS) -> Dict:
+    """Recognition during established Mind Wandering (at least ESTABLISHED_MW_SECONDS after MW entry) in the window.
+
+    Rates use every window step in established MW. Episode measures use MW episodes that begin and end inside the
+    window and last longer than ESTABLISHED_MW_SECONDS: whether a recognition onset occurs after that point, and the
+    longest stretch of the episode without recognition (D_t = 0). Recognition carried across the boundary without a
+    new onset does not count as an onset. Checks are the monitoring checks in the window (zero for runs without them).
+    """
+    states, events = results['state_history'], results['detection_event_history']
+    held, content = results['detection_completed_history'], results['accessed_content_history']
+    checks = results.get('monitor_check_history') or []
+    n = len(states)
+    lo = max(0, n - window)
+    established = int(round(ESTABLISHED_MW_SECONDS / DEFAULT_DT))
+    onsets, established_steps, episodes, without, longest = [], 0, 0, 0, []
+    a = 0
+    while a < n:
+        z = a
+        while z < n and states[z] == states[a]:
+            z += 1
+        if states[a] == OFF_TASK_STATE:
+            for t in range(max(a + established, lo), z):
+                established_steps += 1
+                if events[t]:
+                    onsets.append(t)
+            if a >= lo and z < n and z - a > established:
+                episodes += 1
+                without += not any(events[t] for t in range(a + established, z))
+                run = best = 0
+                for t in range(a, z):
+                    run = 0 if held[t] else run + 1
+                    best = max(best, run)
+                longest.append(best * DEFAULT_DT)
+        a = z
+    return {'onsets': len(onsets), 'established_seconds': established_steps * DEFAULT_DT,
+            'distractor_onsets': sum(content[t] in DISTRACTORS for t in onsets), 'episodes': episodes,
+            'episodes_without_onset': without, 'longest_unrecognized_seconds': longest,
+            'checks': int(sum(bool(x) for x in checks[lo:n]))}
+
+
+def anatomy_seed(pinned_seed: int, seeds: Sequence[int], load_pair, window: int = PLOT_STEPS, qualifies=None) -> int:
+    """Fig. 6 run: the pinned seed if both phenotypes have both Fig. 6 events, else the first such seed."""
+    if qualifies is None:
+        qualifies = lambda run, w: (canonical_return_detection(run, w) is not None  # noqa: E731
+                                    and established_mw_check_onset(run, w) is not None)
     for seed in (pinned_seed, *sorted(s for s in seeds if s != pinned_seed)):
-        if all(focal_distractor_detection(run, window) is not None for run in load_pair(seed)):
+        if all(qualifies(run, window) for run in load_pair(seed)):
             return seed
-    raise ValueError(f"No seed has a focal-distractor detection for both phenotypes in the final {window} steps.")
+    raise ValueError(f"No seed has both Fig. 6 events for both phenotypes in the final {window} steps.")
 
 
 # Fig. 6 guides: (label, colour, line style, width).
@@ -415,13 +521,52 @@ ANATOMY_GUIDES = (('Recognition onset', '0.1', '-', 0.9),
                   ('Recognition offset', '0.1', ':', 1.1))
 ANATOMY_TRACKS = ('Regime (L1)', 'Workspace (L3)', 'Lapse known (L3)', 'Monitoring clarity\n$m_t$ (L3)',
                   'Lapse belief\n$q_t$ (L3)')
+ED_TRACKS = ('Regime (L1)', 'Workspace (L3)', 'Lapse known (L3)', 'Monitoring clarity\n$m_t$ (L3)')
+# Fig. 6B lapse-known track: recognition intervals above, the check interval as a thinner bar below, check ticks.
+KNOWN_BAR, CHECK_BAR, CHECK_TICK = (0.52, 0.84), (0.20, 0.32), (0.08, 0.44)
+_LABELLED = dict(fontsize=6, ha='left', va='center', zorder=7,
+                 bbox=dict(facecolor='white', edgecolor='none', pad=0.6, alpha=0.9))
+
+
+def _band_tracks(regime_ax, content_ax, results, lo, hi, x):
+    states = results['state_history']
+    for state, start, end in access_runs(states[lo:hi]):
+        regime_ax.axvspan(x(lo + start), x(lo + end), ymin=0.15, ymax=0.85, color=STATE_BAND_COLORS[state],
+                          linewidth=0, zorder=3)
+        if x(lo + end) - x(lo + start) >= 1.2:
+            regime_ax.text((x(lo + start) + x(lo + end)) / 2, 0.5, STATE_SHORT_NAMES[state], fontsize=6.5,
+                           ha='center', va='center', zorder=7,
+                           bbox=dict(facecolor=STATE_BAND_COLORS[state], edgecolor='none', pad=0.3))
+    for name, start, end in access_runs(results['accessed_content_history'][lo:hi]):
+        content_ax.axvspan(x(lo + start), x(lo + end), ymin=0.30, ymax=0.75, color=THOUGHTSEED_COLORS[name],
+                           linewidth=0, zorder=3)
+
+
+def _trace(ax, values, lo, hi, seconds, reference, reference_label):
+    values = np.asarray(values, dtype=float)[lo:hi]
+    ax.step(seconds, np.append(values, values[-1]), where='post', color='0.1', linewidth=0.8, zorder=3)
+    ax.axhline(reference, color='0.45', linestyle='--', linewidth=0.6, zorder=2)
+    ax.text(seconds[-1] - 0.3, reference + 0.04, reference_label, fontsize=6.5, ha='right', va='bottom',
+            color='0.3', zorder=4)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_yticks([0.0, 0.5, 1.0])
+    ax.grid(axis='y', alpha=0.3)
+
+
+def _bare(axes):
+    for ax in axes:
+        ax.set_ylim(0.0, 1.0)
+        ax.set_yticks([])
+        ax.grid(False)
 
 
 def _anatomy_column(axes, results, label, before_steps, after_steps):
+    """Fig. 6A column: the canonical-return detection, aligned on recognition onset."""
     states = results['state_history']
-    entry = focal_distractor_detection(results)
+    entry = canonical_return_detection(results)
     if entry is None:
-        raise ValueError(f"{label}: no focal-distractor detection in the final {PLOT_STEPS} steps.")
+        raise ValueError(f"{label}: no focal-distractor detection with an MW -> MA -> RA -> BF lapse in the final "
+                         f"{PLOT_STEPS} steps.")
     lo, hi = entry - before_steps, entry + after_steps
     if lo < int(results['training_steps']):
         raise ValueError(f"{label}: the window would reach back before the frozen rollout.")
@@ -434,42 +579,18 @@ def _anatomy_column(axes, results, label, before_steps, after_steps):
     seconds = (np.arange(lo, hi + 1) - entry) * DEFAULT_DT
     x = lambda step: (step - entry) * DEFAULT_DT  # noqa: E731
     regime_ax, content_ax, known_ax, clarity_ax, belief_ax = axes
-    labelled = dict(fontsize=6, ha='left', va='center', zorder=7,
-                    bbox=dict(facecolor='white', edgecolor='none', pad=0.6, alpha=0.9))
-
-    for state, start, end in access_runs(states[lo:hi]):
-        regime_ax.axvspan(x(lo + start), x(lo + end), ymin=0.15, ymax=0.85, color=STATE_BAND_COLORS[state],
-                          linewidth=0, zorder=3)
-        if x(lo + end) - x(lo + start) >= 1.2:
-            regime_ax.text((x(lo + start) + x(lo + end)) / 2, 0.5, STATE_SHORT_NAMES[state], fontsize=6.5,
-                           ha='center', va='center', zorder=7,
-                           bbox=dict(facecolor=STATE_BAND_COLORS[state], edgecolor='none', pad=0.3))
-    for name, start, end in access_runs(results['accessed_content_history'][lo:hi]):
-        content_ax.axvspan(x(lo + start), x(lo + end), ymin=0.30, ymax=0.75, color=THOUGHTSEED_COLORS[name],
-                           linewidth=0, zorder=3)
+    _band_tracks(regime_ax, content_ax, results, lo, hi, x)
     content_ax.plot([0.0, x(overlap_end)], [0.88, 0.88], color='black', linewidth=2.0, solid_capstyle='butt',
                     zorder=6)
-    content_ax.text(x(overlap_end) + 0.3, 0.88, f'Same-distractor overlap {x(overlap_end):.1f} s', **labelled)
+    content_ax.text(x(overlap_end) + 0.3, 0.88, f'Same-distractor overlap {x(overlap_end):.1f} s', **_LABELLED)
     known_ax.axvspan(0.0, x(offset), ymin=0.30, ymax=0.70, color=DETECTION_COLOR, linewidth=0, zorder=3)
-    known_ax.text(x(offset) + 0.3, 0.5, f'{x(offset):.1f} s', **labelled)
-    for ax in axes[:3]:
-        ax.set_ylim(0.0, 1.0)
-        ax.set_yticks([])
-        ax.grid(False)
+    known_ax.text(x(offset) + 0.3, 0.5, f'{x(offset):.1f} s', **_LABELLED)
+    _bare(axes[:3])
     regime_ax.set_title(label, loc='left', fontsize=8, pad=3)
-
-    def trace(ax, values, reference, reference_label):
-        values = np.asarray(values, dtype=float)[lo:hi]
-        ax.step(seconds, np.append(values, values[-1]), where='post', color='0.1', linewidth=0.8, zorder=3)
-        ax.axhline(reference, color='0.45', linestyle='--', linewidth=0.6, zorder=2)
-        ax.text(seconds[-1] - 0.3, reference + 0.04, reference_label, fontsize=6.5, ha='right', va='bottom',
-                color='0.3', zorder=4)
-        ax.set_ylim(0.0, 1.0)
-        ax.set_yticks([0.0, 0.5, 1.0])
-        ax.grid(axis='y', alpha=0.3)
-
-    trace(clarity_ax, results['clarity_history'], float(results['resting_clarity']), r'$m_{\mathrm{rest}}$')
-    trace(belief_ax, results['lapse_belief_history'], 0.5, '1/2')
+    _trace(clarity_ax, results['clarity_history'], lo, hi, seconds, float(results['resting_clarity']),
+           r'$m_{\mathrm{rest}}$')
+    clarity_ax.set_yticks([0.5, 1.0])  # no 0.0 label, which would collide with the lapse-belief 1.0 label below
+    _trace(belief_ax, results['lapse_belief_history'], lo, hi, seconds, 0.5, '1/2')
     for (_, color, style, width), step in zip(ANATOMY_GUIDES, (entry, reentry, offset)):
         for ax in axes:
             ax.axvline(x(step), color=color, linestyle=style, linewidth=width, zorder=5)
@@ -477,29 +598,102 @@ def _anatomy_column(axes, results, label, before_steps, after_steps):
         ax.set_xlim(seconds[0], seconds[-1])
 
 
+def _ed_column(axes, results, label, before_steps, after_steps):
+    """Fig. 6B column: the first recognition onset during established MW inside a check interval."""
+    found = established_mw_check_onset(results)
+    if found is None:
+        raise ValueError(f"{label}: no recognition onset during established MW inside a check interval.")
+    entry, in_window = found
+    lo, hi = entry - before_steps, entry + after_steps
+    held = [bool(x) for x in results['detection_completed_history']]
+    engaged = [bool(x) for x in results['monitor_engaged_history']]
+    checks = [t for t in range(lo, hi) if results['monitor_check_history'][t]]
+    offset = _flag_end(held, entry)
+    seconds = (np.arange(lo, hi + 1) - entry) * DEFAULT_DT
+    x = lambda step: (step - entry) * DEFAULT_DT  # noqa: E731
+    regime_ax, content_ax, known_ax, clarity_ax = axes
+    _band_tracks(regime_ax, content_ax, results, lo, hi, x)
+    for start, end in _true_runs(held, lo, hi):
+        known_ax.axvspan(x(start), x(end), ymin=KNOWN_BAR[0], ymax=KNOWN_BAR[1], color=DETECTION_COLOR, linewidth=0,
+                         zorder=3)
+    for start, end in _true_runs(engaged, lo, hi):
+        known_ax.axvspan(x(start), x(end), ymin=CHECK_BAR[0], ymax=CHECK_BAR[1], color=MONITOR_CHECK_COLOR,
+                         linewidth=0, zorder=3)
+    for t in checks:
+        known_ax.plot([x(t), x(t)], CHECK_TICK, color=MONITOR_CHECK_COLOR, linewidth=1.2, zorder=4)
+    # Above the bar, so the label cannot cover a later recognition interval.
+    known_ax.text(0.3, 0.95, f'{x(offset):.1f} s', **_LABELLED)
+    _bare(axes[:3])
+    regime_ax.set_title(label + ('' if in_window else ' (outside the plot window)'), loc='left', fontsize=8, pad=3)
+    _trace(clarity_ax, results['clarity_history'], lo, hi, seconds, float(results['resting_clarity']),
+           r'$m_{\mathrm{rest}}$')
+    for (_, color, style, width), step in ((ANATOMY_GUIDES[0], entry), (ANATOMY_GUIDES[2], offset)):
+        if lo <= step <= hi:
+            for ax in axes:
+                ax.axvline(x(step), color=color, linestyle=style, linewidth=width, zorder=5)
+    for ax in axes:
+        ax.set_xlim(seconds[0], seconds[-1])
+
+
+def _true_runs(flags: Sequence[bool], lo: int, hi: int) -> List[Tuple[int, int]]:
+    """[start, end) runs of True within [lo, hi)."""
+    runs, t = [], lo
+    while t < hi:
+        if flags[t]:
+            u = t
+            while u < hi and flags[u]:
+                u += 1
+            runs.append((t, u))
+            t = u
+        else:
+            t += 1
+    return runs
+
+
 def plot_lapse_anatomy(novice_results, expert_results, save_path: str,
-                       before_seconds: float = 8.0, after_seconds: float = 16.0) -> None:
-    """Fig. 6: one focal-distractor detection per phenotype, aligned on recognition onset."""
+                       before_seconds: float = 8.0, after_seconds: float = 16.0,
+                       ed_seconds: Tuple[float, float] = ED_PANEL_SECONDS) -> None:
+    """Fig. 6. A: one canonical-return detection per phenotype, aligned on recognition onset. B: one recognition onset
+    during established MW inside a check interval per phenotype, with its context."""
     set_plot_style()
     before, after = int(round(before_seconds / DEFAULT_DT)), int(round(after_seconds / DEFAULT_DT))
+    ed_before, ed_after = (int(round(s / DEFAULT_DT)) for s in ed_seconds)
+    ratios_a, ratios_b = [0.35, 0.6, 0.35, 0.7, 0.7], [0.35, 0.6, 0.45, 0.7]
     with plt.rc_context({'font.size': 7, 'axes.labelsize': 7, 'xtick.labelsize': 6.5, 'ytick.labelsize': 6.5}):
-        fig, axes = plt.subplots(len(ANATOMY_TRACKS), 2, figsize=(5.95, 4.0), sharex=True, sharey='row',
-                                 gridspec_kw={'height_ratios': [0.35, 0.6, 0.35, 1.0, 1.0], 'hspace': 0.12,
-                                              'wspace': 0.08})
-        _anatomy_column(axes[:, 0], novice_results, 'Novice', before, after)
-        _anatomy_column(axes[:, 1], expert_results, 'Expert', before, after)
-        for ax, name in zip(axes[:, 0], ANATOMY_TRACKS):
-            if '$' in name:
-                ax.set_ylabel(name)
-            else:
+        fig = plt.figure(figsize=(5.95, 5.8))
+        outer = fig.add_gridspec(2, 1, height_ratios=[sum(ratios_a) + 0.45, sum(ratios_b) + 0.45], hspace=0.28)
+        blocks = []
+        for spec, ratios, tracks, column, args, xlabel, step in (
+                (outer[0], ratios_a, ANATOMY_TRACKS, _anatomy_column, (before, after), (before_seconds, after_seconds),
+                 4.0),
+                (outer[1], ratios_b, ED_TRACKS, _ed_column, (ed_before, ed_after), ed_seconds, 10.0)):
+            grid = spec.subgridspec(len(tracks), 2, height_ratios=ratios, hspace=0.12, wspace=0.08)
+            axes = np.array([[fig.add_subplot(grid[r, c]) for c in range(2)] for r in range(len(tracks))])
+            column(axes[:, 0], novice_results, 'Novice', *args)
+            column(axes[:, 1], expert_results, 'Expert', *args)
+            for r in range(len(tracks)):
+                for c in range(2):
+                    if r < len(tracks) - 1:
+                        axes[r, c].tick_params(labelbottom=False)
+                    if c == 1:
+                        axes[r, c].tick_params(labelleft=False)
+                axes[r, 1].set_ylim(axes[r, 0].get_ylim())
+            for ax, name in zip(axes[:, 0], tracks):
                 ax.set_ylabel(name, rotation=0, ha='right', va='center')
-        for ax in axes[-1]:
-            ax.set_xticks(np.arange(-before_seconds, after_seconds + 1, 4.0))
-            ax.set_xlabel('Time from recognition onset (s)')
+            for ax in axes[-1]:
+                ax.set_xticks(np.arange(-xlabel[0], xlabel[1] + 1, step))
+                ax.set_xlabel('Time from recognition onset (s)')
+            blocks.append(axes)
+        for letter, axes in zip('AB', blocks):
+            box = axes[0, 0].get_position()
+            fig.text(0.0, box.y1 + 0.012, letter, fontsize=10, fontweight='bold', ha='left', va='bottom')
         handles = content_legend_handles(ACCESSIBLE_CONTENTS) + [
             Line2D([], [], color=color, linestyle=style, linewidth=width + 0.3, label=name)
-            for name, color, style, width in ANATOMY_GUIDES]
-        fig.legend(handles=handles, loc='lower center', ncol=4, fontsize=6.5, frameon=False,
-                   bbox_to_anchor=(0.5, 0.92), columnspacing=1.0, handlelength=2.0)
+            for name, color, style, width in ANATOMY_GUIDES] + [
+            Line2D([], [], color=MONITOR_CHECK_COLOR, marker='|', linestyle='none', markersize=7,
+                   markeredgewidth=1.2, label='Monitoring check'),
+            Patch(facecolor=MONITOR_CHECK_COLOR, label='Check interval')]
+        fig.legend(handles=handles, loc='lower center', ncol=5, fontsize=6.5, frameon=False,
+                   bbox_to_anchor=(0.5, 0.93), columnspacing=1.0, handlelength=2.0)
         save_figure(fig, save_path)
     plt.close(fig)

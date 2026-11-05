@@ -108,7 +108,7 @@ def plot_hierarchy_continuous(data, save_path: str, level_name: str):
     fig.legend(handles=content_legend_handles() + recognition_handles + regime_legend_handles(), loc='lower center',
                fontsize=9, frameon=False, ncol=5, bbox_to_anchor=(0.5, 0.005))
 
-    ax3.set_xlabel('Time from evaluation-window start (s)', fontsize=12, fontweight='bold', labelpad=12)
+    ax3.set_xlabel('Time (s)', fontsize=12, fontweight='bold', labelpad=12)
     ax3.set_ylabel('Network Activation', fontsize=12, fontweight='bold')
     ax3.set_ylim(0.0, 1.0)
     ax3.set_title('Layer 1: Network Dynamics', fontsize=14, fontweight='bold', loc='left')

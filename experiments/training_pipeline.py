@@ -25,6 +25,7 @@ def _combine_fit_and_rollout(fit_results, rollout_results, evaluation_seed):
         'accessed_content_history', 'state_history', 'network_activations_history', 'thoughtseed_activations_history',
         'regime_belief_history',
         'detection_event_history', 'detection_completed_history',
+        'monitor_check_history', 'monitor_engaged_history',
     )
     combined = {key: fit_results[key] + rollout_results[key] for key in keys}
     combined['transitions'] = list(fit_results['transitions']) + [
@@ -34,6 +35,7 @@ def _combine_fit_and_rollout(fit_results, rollout_results, evaluation_seed):
     combined.update({
         'experience_level': fit_results['experience_level'],
         'model_version': fit_results['model_version'],
+        'monitor_checks': fit_results['monitor_checks'],
         'access_prior': fit_results['access_prior'],
         'return_habit': fit_results['return_habit'],
         'observation_precision': fit_results['observation_precision'],

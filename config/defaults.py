@@ -2,7 +2,7 @@
 
 from math import log, tanh
 
-MODEL_VERSION = 'clarity-v47'
+MODEL_VERSION = 'clarity-v48'  # v47 + monitoring checks (adopted 2026-11-05)
 
 STATES = ['breath_focus', 'mind_wandering', 'meta_awareness', 'redirect_attention']
 NETWORKS = ['DMN', 'VAN', 'DAN', 'FPN', 'VIS', 'SOM', 'LIM']
@@ -135,5 +135,15 @@ assert LAPSE_EVIDENCE[PRACTICE_OBJECT] < 0 and all(LAPSE_EVIDENCE[d] > 0 for d i
 # Cue term of the monitor drive: gain c(cue), zero at the MW (and BF) cue prior.
 CUE_MONITOR_GAIN = ON_TASK_CONTRAST[RECOGNITION_CUE]
 CUE_MONITOR_CENTRE = THOUGHTSEED_STATE_PRIORS[OFF_TASK_STATE][RECOGNITION_CUE]
+# Monitoring checks (clarity-v48), on in fit and rollout; MeditationTrainer(monitor_checks=False) reproduces clarity-v47.
+# While a distractor holds the slot, a check occurs with probability MONITOR_CHECK_RATE per step, a configured value
+# shared by both phenotypes and calibrated for illustration, not fitted. A check opens or restarts a check interval of
+# MONITOR_CHECK_SECONDS including the current step (one monitor time constant, ten steps), during which the monitor
+# drive gains MONITOR_CHECK_SUPPORT, the cue's MA-minus-MW contribution c(cue) (mu_cue(MA) - mu_cue(MW)). Check draws
+# use their own generator (GlobalWorkspace.seed_checks).
+MONITOR_CHECKS = True
+MONITOR_CHECK_RATE = 0.0106
+MONITOR_CHECK_SECONDS = CLARITY_TAU
+MONITOR_CHECK_SUPPORT = CUE_MONITOR_GAIN * (THOUGHTSEED_STATE_PRIORS[MA_STATE][RECOGNITION_CUE] - CUE_MONITOR_CENTRE)
 # MA and MW have equal diagnosticity for every accessible content; the arg-max resolves to MW (first in STATES).
 assert all(max(row, key=row.get) == OFF_TASK_STATE for t, row in THOUGHTSEED_DIAGNOSTICITY.items() if t in DISTRACTORS)

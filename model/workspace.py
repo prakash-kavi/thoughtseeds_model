@@ -9,6 +9,7 @@ from config.defaults import (
     ACCESS_REVERBERATION,
     ACCESS_THRESHOLD, ACCESSIBLE_MASK, CLARITY_BIAS, DEFAULT_DT, CLARITY_TAU, LAPSE_EVIDENCE, LAPSE_STATES,
     CUE_MONITOR_CENTRE, CUE_MONITOR_GAIN, RECOGNITION_CUE,
+    MONITOR_CHECK_RATE, MONITOR_CHECK_SECONDS, MONITOR_CHECK_SUPPORT,
     LATENT_TAU, ON_OBJECT_STATES, ON_TASK_POSTERIOR,
     ON_TASK_WEIGHT,
     ON_TASK_CONTRAST,
@@ -28,18 +29,23 @@ _ACCESSIBLE_CONTRAST = np.where(_ACCESSIBLE, _ON_TASK_CONTRAST, 0.0)
 _CUE = _INDEX[RECOGNITION_CUE]
 # Contents whose access is evidence of a departure: positive lapse evidence (the distractors, by the import assert).
 _DEPARTURE_EVIDENCE = frozenset(content for content, value in LAPSE_EVIDENCE.items() if value > 0)
+_CHECK_STEPS = int(round(MONITOR_CHECK_SECONDS / DEFAULT_DT))
+_CHECK_STREAM = 0xED  # spawn key of the monitoring-check generator
 
 
 class GlobalWorkspace:
     """L3: single-slot access (eq:access), monitoring clarity (eq:gate), lapse belief (eq:belief), detection
     (eq:detect). Arrays are indexed by THOUGHTSEEDS."""
 
-    def __init__(self, level: str) -> None:
+    def __init__(self, level: str, monitor_checks: bool = False) -> None:
         # eps_on, eps_off: per-step lapse onset and offset from the configured dwell means.
         dwell = DWELL_MEAN_SECONDS[level]
         self._lapse_onset = DEFAULT_DT / sum(dwell[s] for s in ON_OBJECT_STATES)
         self._lapse_offset = DEFAULT_DT / sum(dwell[s] for s in LAPSE_STATES)
         self.access_prior = AccessPrior()
+        # Monitoring checks (config/defaults.py); their draws use a separate generator, seeded by seed_checks.
+        self.monitor_checks = bool(monitor_checks)
+        self.check_rng = np.random.default_rng(0)
         self.reset_tonic()
         self.reset()
 
@@ -52,6 +58,26 @@ class GlobalWorkspace:
         self.detection_completed = False
         self.departure_evidenced = False
         self.lapse_belief = self._lapse_onset / (self._lapse_onset + self._lapse_offset)
+        self.check = False
+        self.engaged = False
+        self._engaged_left = 0
+
+    def seed_checks(self, run_seed: int) -> None:
+        """Monitoring-check stream, separate from the generators of the model dynamics."""
+        self.check_rng = np.random.default_rng([int(run_seed), _CHECK_STREAM])
+
+    def monitor_check(self) -> float:
+        """Monitoring check, evaluated after access: a check with probability MONITOR_CHECK_RATE while a distractor holds
+        the slot (regime-blind); a check opens or restarts the check interval, which includes this step and runs its full
+        duration.
+        Returns the support added to the monitor drive at this step. No draw is made when checks are off."""
+        self.check = bool(self.monitor_checks and self.accessed_content in _DEPARTURE_EVIDENCE
+                          and self.check_rng.random() < MONITOR_CHECK_RATE)
+        if self.check:
+            self._engaged_left = _CHECK_STEPS
+        self.engaged = self._engaged_left > 0
+        self._engaged_left = max(self._engaged_left - 1, 0)
+        return float(MONITOR_CHECK_SUPPORT) if self.engaged else 0.0
 
     def reset_tonic(self) -> None:
         """Uniform Dirichlet counts over the accessible contents; none for the recognition cue."""
@@ -142,6 +168,8 @@ class GlobalWorkspace:
     def update_clarity(self, z_star: Sequence[float]) -> float:
         """tau_m dm/dt = -m + sigmoid(c_bar(z*_t) + g - b_m), c_bar the monitor drive of `background_contrast` (eq:gate)."""
         drive = self.background_contrast(z_star) + self.tonic_contrast - float(CLARITY_BIAS)
+        if self.monitor_checks:
+            drive += self.monitor_check()
         target = sigmoid(drive)
         rate = DEFAULT_DT / float(CLARITY_TAU)
         self.clarity = self.clarity + rate * (target - self.clarity)

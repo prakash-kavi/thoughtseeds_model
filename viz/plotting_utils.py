@@ -58,6 +58,8 @@ THOUGHTSEED_COLORS = {
 }
 # Outside the regime and content palettes, so a known lapse is not read as Redirect Attention.
 DETECTION_COLOR = '0.15'
+# Monitoring checks and the check interval after each (Fig. 6B); also outside the regime and content palettes.
+MONITOR_CHECK_COLOR = '#b8860b'
 
 assert list(STATE_DISPLAY_NAMES) == list(STATE_SHORT_NAMES) == list(STATE_COLORS) == STATES
 assert list(THOUGHTSEED_COLORS) == THOUGHTSEEDS
